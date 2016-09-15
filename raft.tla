@@ -10,6 +10,12 @@ EXTENDS Naturals, FiniteSets, Sequences, TLC
 \* The set of server IDs
 CONSTANTS Server
 
+\* The set of server quorums for electing a leader
+CONSTANTS RequestVoteQuorum
+
+\* The set of server quorums for committing an entry
+CONSTANTS AppendEntriesQuorum
+
 \* Server states.
 CONSTANTS Follower, Candidate, Leader
 
@@ -19,16 +25,19 @@ CONSTANTS Nil
 \* Message types:
 CONSTANTS RequestVoteRequest, RequestVoteResponse,
           AppendEntriesRequest, AppendEntriesResponse
-          
+
 \* Maximum number of client requests
 CONSTANTS MaxClientRequests
 
-
+ASSUME FlexibleQuorums == /\ \A Q \in RequestVoteQuorum : Q \subseteq Server
+                          /\ \A Q \in AppendEntriesQuorum : Q \subseteq Server
+                          /\ \A Q1 \in RequestVoteQuorum :
+                             \A Q2 \in RequestVoteQuorum : Q1 \cap Q2 # {}
+                          /\ \A Q1 \in RequestVoteQuorum :
+                             \A Q2 \in AppendEntriesQuorum : Q1 \cap Q2 # {}
 
 ----
 \* Global variables
-
-
 
 \* A bag of records representing requests and responses sent from one server
 \* to another. TLAPS doesn't support the Bags module, so this is a function
@@ -105,10 +114,6 @@ vars == <<messages, allLogs, serverVars, candidateVars, leaderVars, logVars>>
 ----
 \* Helpers
 
-\* The set of all quorums. This just calculates simple majorities, but the only
-\* important property is that every quorum overlaps with every other.
-Quorum == {i \in SUBSET(Server) : Cardinality(i) * 2 > Cardinality(Server)}
-
 \* The term of the last entry in a log, or 0 if the log is empty.
 LastTerm(xlog) == IF Len(xlog) = 0 THEN 0 ELSE xlog[Len(xlog)].term
 
@@ -127,12 +132,12 @@ WithoutMessage(m, msgs) ==
         [msgs EXCEPT ![m] = IF msgs[m] > 0 THEN msgs[m] - 1 ELSE 0 ]
     ELSE
         msgs
-        
+
 ValidMessage(msgs) ==
     { m \in DOMAIN messages : msgs[m] > 0 }
-    
+
 SingleMessage(msgs) ==
-    { m \in DOMAIN messages : msgs[m] = 1 } 
+    { m \in DOMAIN messages : msgs[m] = 1 }
 
 \* Add a message to the bag of messages.
 Send(m) == messages' = WithMessage(m, messages)
@@ -246,7 +251,7 @@ AppendEntries(i, j) ==
 \* Candidate i transitions to leader.
 BecomeLeader(i) ==
     /\ state[i] = Candidate
-    /\ votesGranted[i] \in Quorum
+    /\ votesGranted[i] \in RequestVoteQuorum
     /\ state'      = [state EXCEPT ![i] = Leader]
     /\ nextIndex'  = [nextIndex EXCEPT ![i] =
                          [j \in Server |-> Len(log[i]) + 1]]
@@ -284,7 +289,7 @@ AdvanceCommitIndex(i) ==
                                          matchIndex[i][k] >= index}
            \* The maximum indexes for which a quorum agrees
            agreeIndexes == {index \in 1..Len(log[i]) :
-                                Agree(index) \in Quorum}
+                                Agree(index) \in AppendEntriesQuorum}
            \* New value for commitIndex'[i]
            newCommitIndex ==
               IF /\ agreeIndexes /= {}
@@ -294,9 +299,9 @@ AdvanceCommitIndex(i) ==
               ELSE
                   commitIndex[i]
            newCommittedLog ==
-              IF newCommitIndex > 1 THEN 
-                  [ j \in 1..newCommitIndex |-> log[i][j] ] 
-              ELSE 
+              IF newCommitIndex > 1 THEN
+                  [ j \in 1..newCommitIndex |-> log[i][j] ]
+              ELSE
                    << >>
        IN /\ commitIndex' = [commitIndex EXCEPT ![i] = newCommitIndex]
           /\ committedLogDecrease' = \/ ( newCommitIndex < Len(committedLog) )
@@ -497,22 +502,16 @@ Next == /\ \/ \E i \in Server : Restart(i)
 Spec == Init /\ [][Next]_vars
 
 \* The following are a set of verification by jinlmsft@hotmail.com
-BothLeader( i, j ) == 
+BothLeader( i, j ) ==
     /\ i /= j
     /\ currentTerm[i] = currentTerm[j]
     /\ state[i] = Leader
     /\ state[j] = Leader
 
 MoreThanOneLeader ==
-    \E i, j \in Server :  BothLeader( i, j ) 
-    
-    
-    
+    \E i, j \in Server :  BothLeader( i, j )
 
-
-
-
-
+CommitDec == committedLogDecrease
 
 
 ===============================================================================
